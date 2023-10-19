@@ -15,6 +15,7 @@
 #import "base/RTCMacros.h"
 #import "base/RTCVideoEncoder.h"
 #import "base/RTCVideoEncoderFactory.h"
+#import "components/video_codec/RTCCodecSpecificInfoH265+Private.h"
 #import "components/video_codec/RTCCodecSpecificInfoH264+Private.h"
 #import "sdk/objc/api/peerconnection/RTCEncodedImage+Private.h"
 #import "sdk/objc/api/peerconnection/RTCVideoCodecInfo+Private.h"
@@ -58,6 +59,9 @@ class ObjCVideoEncoder : public VideoEncoder {
         if ([info isKindOfClass:[RTC_OBJC_TYPE(RTCCodecSpecificInfoH264) class]]) {
           codecSpecificInfo =
               [(RTC_OBJC_TYPE(RTCCodecSpecificInfoH264) *)info nativeCodecSpecificInfo];
+        } else if ([info isKindOfClass:[RTC_OBJC_TYPE(RTCCodecSpecificInfoH265) class]]) {
+            codecSpecificInfo =
+                [(RTC_OBJC_TYPE(RTCCodecSpecificInfoH265) *)info nativeCodecSpecificInfo];
         }
 
         EncodedImageCallback::Result res = callback->OnEncodedImage(encodedImage, &codecSpecificInfo);

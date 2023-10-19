@@ -8,8 +8,8 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#ifndef MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H264_H_
-#define MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H264_H_
+#ifndef MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H265_H_
+#define MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H265_H_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -21,43 +21,59 @@
 #include "api/array_view.h"
 #include "modules/rtp_rtcp/source/rtp_format.h"
 #include "modules/rtp_rtcp/source/rtp_packet_to_send.h"
-#include "modules/video_coding/codecs/h264/include/h264_globals.h"
+#include "modules/video_coding/codecs/h265/include/h265_globals.h"
 #include "rtc_base/buffer.h"
 
 namespace webrtc {
 
 // Bit masks for NAL (F, NRI, Type) indicators.
-constexpr uint8_t kH264FBit = 0x80; // forbidden_zero_bit
-constexpr uint8_t kH264NriMask = 0x60; // nal_ref_idc
-constexpr uint8_t kH264TypeMask = 0x1F;
+//    +---------------+---------------+
+//    |0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|
+//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//    |F|   Type    |  LayerId  | TID |
+//    +-------------+-----------------+
+//    Figure 1: The Structure of the HEVC NAL Unit Header
+constexpr uint8_t kH265FBit = 0x80;
+constexpr uint8_t kH265TypeMask = 0x7E;
+constexpr uint8_t kH265LayerIDHMask = 0x01;
+constexpr uint8_t kH265LayerIDLMask = 0xF8;
+constexpr uint8_t kH265TIDMask = 0x07;
+constexpr uint8_t kH265TypeMaskN = 0x81;
+constexpr uint8_t kH265TypeMaskInFuHeader = 0x3F;
 
-// Bit masks for FU (A and B) headers.
-constexpr uint8_t kH264SBit = 0x80;
-constexpr uint8_t kH264EBit = 0x40;
-constexpr uint8_t kH264RBit = 0x20;
+// Bit masks for FU headers.
+//    +---------------+
+//    |0|1|2|3|4|5|6|7|
+//    +-+-+-+-+-+-+-+-+
+//    |S|E|  FuType   |
+//    +---------------+
+//    Figure 10: The Structure of FU Header
+constexpr uint8_t kH265SBit = 0x80;
+constexpr uint8_t kH265EBit = 0x40;
+constexpr uint8_t kH265FuTypeBit = 0x3F;
 
-class RtpPacketizerH264 : public RtpPacketizer {
+class RtpPacketizerH265 : public RtpPacketizer {
  public:
   // Initialize with payload from encoder.
-  // The payload_data must be exactly one encoded H264 frame.
-  RtpPacketizerH264(rtc::ArrayView<const uint8_t> payload,
+  // The payload_data must be exactly one encoded H265 frame.
+  RtpPacketizerH265(rtc::ArrayView<const uint8_t> payload,
                     PayloadSizeLimits limits,
-                    H264PacketizationMode packetization_mode);
+                    H265PacketizationMode packetization_mode);
 
-  ~RtpPacketizerH264() override;
+  ~RtpPacketizerH265() override;
 
-  RtpPacketizerH264(const RtpPacketizerH264&) = delete;
-  RtpPacketizerH264& operator=(const RtpPacketizerH264&) = delete;
+  RtpPacketizerH265(const RtpPacketizerH265&) = delete;
+  RtpPacketizerH265& operator=(const RtpPacketizerH265&) = delete;
 
   size_t NumPackets() const override;
 
-  // Get the next payload with H264 payload header.
+  // Get the next payload with H265 payload header.
   // Write payload and set marker bit of the `packet`.
   // Returns true on success, false otherwise.
   bool NextPacket(RtpPacketToSend* rtp_packet) override;
 
  private:
-  // A packet unit (H264 packet), to be put into an RTP packet:
+  // A packet unit (H265 packet), to be put into an RTP packet:
   // If a NAL unit is too large for an RTP packet, this packet unit will
   // represent a FU-A packet of a single fragment of the NAL unit.
   // If a NAL unit is small enough to fit within a single RTP packet, this
@@ -68,23 +84,25 @@ class RtpPacketizerH264 : public RtpPacketizer {
                bool first_fragment,
                bool last_fragment,
                bool aggregated,
-               uint8_t header)
+               uint16_t header)
         : source_fragment(source_fragment),
           first_fragment(first_fragment),
           last_fragment(last_fragment),
           aggregated(aggregated),
-          header(header) {}
+          header(header) {
+              
+          }
 
     rtc::ArrayView<const uint8_t> source_fragment;
     bool first_fragment;
     bool last_fragment;
     bool aggregated;
-    uint8_t header;
+    uint16_t header;
   };
 
-  bool GeneratePackets(H264PacketizationMode packetization_mode);
-  bool PacketizeFuA(size_t fragment_index);
-  size_t PacketizeStapA(size_t fragment_index);
+  bool GeneratePackets(H265PacketizationMode packetization_mode);
+  bool PacketizeFU(size_t fragment_index);
+  size_t PacketizeAP(size_t fragment_index);
   bool PacketizeSingleNalu(size_t fragment_index);
 
   void NextAggregatePacket(RtpPacketToSend* rtp_packet);
@@ -96,4 +114,4 @@ class RtpPacketizerH264 : public RtpPacketizer {
   std::queue<PacketUnit> packets_;
 };
 }  // namespace webrtc
-#endif  // MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H264_H_
+#endif  // MODULES_RTP_RTCP_SOURCE_RTP_FORMAT_H265_H_

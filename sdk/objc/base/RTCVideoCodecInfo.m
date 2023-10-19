@@ -54,12 +54,16 @@
 
 - (instancetype)initWithCoder:(NSCoder *)decoder {
   return [self initWithName:[decoder decodeObjectForKey:@"name"]
-                 parameters:[decoder decodeObjectForKey:@"parameters"]];
+                 parameters:[decoder decodeObjectOfClass:[NSDictionary class] forKey:@"parameters"]];
 }
 
 - (void)encodeWithCoder:(NSCoder *)encoder {
   [encoder encodeObject:_name forKey:@"name"];
   [encoder encodeObject:_parameters forKey:@"parameters"];
+}
+
++ (BOOL)supportsSecureCoding {
+    return true;
 }
 
 @end

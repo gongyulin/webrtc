@@ -43,8 +43,8 @@ enum NaluType : uint8_t {
   kEndOfStream = 11,
   kFiller = 12,
   kPrefix = 14,
-  kStapA = 24,
-  kFuA = 28
+  kStapA = 24, // Single-Time Aggregation Packet
+  kFuA = 28,  // Fragmentation Units
 };
 
 enum SliceType : uint8_t { kP = 0, kB = 1, kI = 2, kSp = 3, kSi = 4 };

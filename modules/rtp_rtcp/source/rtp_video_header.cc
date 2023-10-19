@@ -61,6 +61,8 @@ VideoFrameMetadata RTPVideoHeader::GetAsMetadata() const {
       break;
     case VideoCodecType::kVideoCodecH265:
       // TODO(bugs.webrtc.org/13485)
+      metadata.SetRTPVideoHeaderCodecSpecifics(
+         absl::get<RTPVideoHeaderH265>(video_type_header));
       break;
     default:
       // Codec-specifics are not supported for this codec.
@@ -104,6 +106,10 @@ void RTPVideoHeader::SetFromMetadata(const VideoFrameMetadata& metadata) {
       video_type_header = absl::get<RTPVideoHeaderH264>(
           metadata.GetRTPVideoHeaderCodecSpecifics());
       break;
+    case VideoCodecType::kVideoCodecH265:
+      video_type_header = absl::get<RTPVideoHeaderH265>(
+      metadata.GetRTPVideoHeaderCodecSpecifics());
+        break;
     default:
       // Codec-specifics are not supported for this codec.
       break;

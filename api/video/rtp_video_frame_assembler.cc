@@ -53,6 +53,7 @@ std::unique_ptr<VideoRtpDepacketizer> CreateDepacketizer(
       return std::make_unique<VideoRtpDepacketizerGeneric>();
     case RtpVideoFrameAssembler::kH265:
       // TODO(bugs.webrtc.org/13485): Implement VideoRtpDepacketizerH265
+      return std::make_unique<VideoRtpDepacketizerH265>();
       RTC_DCHECK_NOTREACHED();
       return nullptr;
   }

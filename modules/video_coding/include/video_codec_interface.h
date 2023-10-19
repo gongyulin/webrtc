@@ -19,6 +19,7 @@
 #include "api/video_codecs/video_decoder.h"
 #include "api/video_codecs/video_encoder.h"
 #include "common_video/generic_frame_descriptor/generic_frame_info.h"
+#include "modules/video_coding/codecs/h265/include/h265_globals.h"
 #include "modules/video_coding/codecs/h264/include/h264_globals.h"
 #include "modules/video_coding/codecs/vp9/include/vp9_globals.h"
 #include "modules/video_coding/include/video_error_codes.h"
@@ -90,10 +91,17 @@ struct CodecSpecificInfoH264 {
 };
 static_assert(std::is_pod<CodecSpecificInfoH264>::value, "");
 
+struct CodecSpecificInfoH265 {
+  H265PacketizationMode packetization_mode;
+  bool idr_frame;
+};
+static_assert(std::is_pod<CodecSpecificInfoH265>::value, "");
+
 union CodecSpecificInfoUnion {
   CodecSpecificInfoVP8 VP8;
   CodecSpecificInfoVP9 VP9;
   CodecSpecificInfoH264 H264;
+  CodecSpecificInfoH265 H265;
 };
 static_assert(std::is_pod<CodecSpecificInfoUnion>::value, "");
 

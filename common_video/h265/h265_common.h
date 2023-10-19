@@ -31,6 +31,9 @@ constexpr size_t kNaluShortStartSequenceSize = 3;
 // The size of the NALU header byte (2).
 constexpr size_t kNaluHeaderSize = 2;
 
+// The size of the NALU type byte (1).
+const size_t kNaluTypeSize = 1;
+
 // Type description of 0-40 is defined in Table7-1 of the H.265 spec
 // Type desciption of 48-49 is defined in section 4.4.2 and 4.4.3 of RFC7798
 enum NaluType : uint8_t {
@@ -55,8 +58,8 @@ enum NaluType : uint8_t {
   kAud = 35,
   kPrefixSei = 39,
   kSuffixSei = 40,
-  kAP = 48,
-  kFU = 49
+  kAP = 48, // Aggregation Packets，多个NAL合并成一个RTP包
+  kFU = 49, // Fragmentation Units
 };
 
 // Slice type definition. See table 7-7 of the H265 spec

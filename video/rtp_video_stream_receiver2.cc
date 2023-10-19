@@ -39,6 +39,7 @@
 #include "modules/rtp_rtcp/source/video_rtp_depacketizer_raw.h"
 #include "modules/video_coding/h264_sprop_parameter_sets.h"
 #include "modules/video_coding/h264_sps_pps_tracker.h"
+#include "modules/video_coding/h265_sps_pps_tracker.h"
 #include "modules/video_coding/nack_requester.h"
 #include "modules/video_coding/packet_buffer.h"
 #include "rtc_base/checks.h"
@@ -669,8 +670,33 @@ void RtpVideoStreamReceiver2::OnReceivedPayloadData(
     rtcp_feedback_buffer_.SendBufferedRtcpFeedback();
     return;
   }
+    
+  if (packet->codec() == kVideoCodecH265) {
+      // Only when we start to receive packets will we know what payload type
+      // that will be used. When we know the payload type insert the correct
+      // sps/pps into the tracker.
+      if (packet->payload_type != last_payload_type_) {
+        last_payload_type_ = packet->payload_type;
+        InsertSpsPpsIntoTracker(packet->payload_type);
+      }
 
-  if (packet->codec() == kVideoCodecH264) {
+      video_coding::H265SpsPpsTracker::FixedBitstream fixed =
+         h265_tracker_.CopyAndFixBitstream(
+              rtc::MakeArrayView(codec_payload.cdata(), codec_payload.size()),
+              &packet->video_header);
+
+      switch (fixed.action) {
+        case video_coding::H265SpsPpsTracker::kRequestKeyframe:
+          rtcp_feedback_buffer_.RequestKeyFrame();
+          rtcp_feedback_buffer_.SendBufferedRtcpFeedback();
+          [[fallthrough]];
+        case video_coding::H265SpsPpsTracker::kDrop:
+          return;
+        case video_coding::H265SpsPpsTracker::kInsert:
+          packet->video_payload = std::move(fixed.bitstream);
+          break;
+      }
+  } else if (packet->codec() == kVideoCodecH264) {
     // Only when we start to receive packets will we know what payload type
     // that will be used. When we know the payload type insert the correct
     // sps/pps into the tracker.

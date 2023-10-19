@@ -421,6 +421,7 @@ const H265SpsParser::SpsState* H265BitstreamParser::GetSPS(uint32_t id) const {
 
 void H265BitstreamParser::ParseSlice(const uint8_t* slice, size_t length) {
   H265::NaluType nalu_type = H265::ParseNaluType(slice[0]);
+  RTC_LOG(LS_INFO) << "H265 nal_type: " << nalu_type << ", length: " << length;
   switch (nalu_type) {
     case H265::NaluType::kVps: {
       absl::optional<H265VpsParser::VpsState> vps_state;
@@ -472,16 +473,23 @@ void H265BitstreamParser::ParseSlice(const uint8_t* slice, size_t length) {
       }
       break;
     }
-    case H265::NaluType::kAud:
     case H265::NaluType::kPrefixSei:
-    case H265::NaluType::kSuffixSei:
+    case H265::NaluType::kSuffixSei: {
+//        printf("[H265 SEI Type 5]:n");
+//          for (size_t i = H265::kNaluHeaderSize; i < length - H265::kNaluHeaderSize; i++) {
+//              printf("%c", slice[i]);
+//          }
+//          printf("\n");
+          break;
+      }
+    case H265::NaluType::kAud:
     case H265::NaluType::kAP:
     case H265::NaluType::kFU:
       break;
     default:
       Result res = ParseNonParameterSetNalu(slice, length, nalu_type);
       if (res != kOk) {
-        RTC_LOG(LS_INFO) << "Failed to parse bitstream. Error: " << res;
+        RTC_LOG(LS_INFO) << "Failed to parse H265 bitstream. Error: " << res;
       }
       break;
   }

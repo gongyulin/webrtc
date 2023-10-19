@@ -76,7 +76,7 @@ RTC_NORETURN void WriteFatalLog(absl::string_view output) {
   DebugBreak();
 #endif
   abort();
-}
+} 
 
 RTC_NORETURN void WriteFatalLog(const char* file,
                                 int line,

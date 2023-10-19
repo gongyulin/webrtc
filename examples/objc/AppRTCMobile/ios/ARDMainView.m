@@ -31,6 +31,7 @@ static CGFloat const kCallControlMargin = 8;
     _roomText.borderStyle = UITextBorderStyleNone;
     _roomText.font = [UIFont systemFontOfSize:12];
     _roomText.placeholder = @"Room name";
+      _roomText.text = @"1234567";
     _roomText.autocorrectionType = UITextAutocorrectionTypeNo;
     _roomText.autocapitalizationType = UITextAutocapitalizationTypeNone;
     _roomText.clearButtonMode = UITextFieldViewModeAlways;

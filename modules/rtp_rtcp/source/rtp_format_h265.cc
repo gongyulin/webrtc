@@ -8,7 +8,7 @@
  *  be found in the AUTHORS file in the root of the source tree.
  */
 
-#include "modules/rtp_rtcp/source/rtp_format_h264.h"
+#include "modules/rtp_rtcp/source/rtp_format_h265.h"
 
 #include <string.h>
 
@@ -21,10 +21,10 @@
 
 #include "absl/types/optional.h"
 #include "absl/types/variant.h"
-#include "common_video/h264/h264_common.h"
-#include "common_video/h264/pps_parser.h"
-#include "common_video/h264/sps_parser.h"
-#include "common_video/h264/sps_vui_rewriter.h"
+#include "common_video/h265/h265_common.h"
+#include "common_video/h265/h265_pps_parser.h"
+#include "common_video/h265/h265_sps_parser.h"
+#include "common_video/h265/h265_vps_parser.h"
 #include "modules/rtp_rtcp/source/byte_io.h"
 #include "modules/rtp_rtcp/source/rtp_packet_to_send.h"
 #include "rtc_base/checks.h"
@@ -33,21 +33,22 @@
 namespace webrtc {
 namespace {
 
-static const size_t kNalHeaderSize = 1;
-static const size_t kFuAHeaderSize = 2;
-static const size_t kLengthFieldSize = 2; // 2个字节存储 nal size
+// Unlike H.264, HEVC NAL header is 2-bytes.
+static const size_t kH265NalHeaderSize = 2;
+static const size_t kH265FuHeaderSize = 1;
+static const size_t kH265LengthFieldSize = 2;
 
 }  // namespace
 
-RtpPacketizerH264::RtpPacketizerH264(rtc::ArrayView<const uint8_t> payload,
+RtpPacketizerH265::RtpPacketizerH265(rtc::ArrayView<const uint8_t> payload,
                                      PayloadSizeLimits limits,
-                                     H264PacketizationMode packetization_mode)
+                                     H265PacketizationMode packetization_mode)
     : limits_(limits), num_packets_left_(0) {
   // Guard against uninitialized memory in packetization_mode.
-  RTC_CHECK(packetization_mode == H264PacketizationMode::NonInterleaved ||
-            packetization_mode == H264PacketizationMode::SingleNalUnit);
+  RTC_CHECK(packetization_mode == H265PacketizationMode::NonInterleaved ||
+            packetization_mode == H265PacketizationMode::SingleNalUnit);
 
-  for (const auto& nalu : H264::FindNaluIndices(payload.data(), payload.size())) {
+  for (const auto& nalu : H265::FindNaluIndices(payload.data(), payload.size())) {
     input_fragments_.push_back(payload.subview(nalu.payload_start_offset, nalu.payload_size));
   }
 
@@ -62,21 +63,21 @@ RtpPacketizerH264::RtpPacketizerH264(rtc::ArrayView<const uint8_t> payload,
   }
 }
 
-RtpPacketizerH264::~RtpPacketizerH264() = default;
+RtpPacketizerH265::~RtpPacketizerH265() = default;
 
-size_t RtpPacketizerH264::NumPackets() const {
+size_t RtpPacketizerH265::NumPackets() const {
   return num_packets_left_;
 }
 
-bool RtpPacketizerH264::GeneratePackets(H264PacketizationMode packetization_mode) {
+bool RtpPacketizerH265::GeneratePackets(H265PacketizationMode packetization_mode) {
   for (size_t i = 0; i < input_fragments_.size();) {
     switch (packetization_mode) {
-      case H264PacketizationMode::SingleNalUnit:
+      case H265PacketizationMode::SingleNalUnit:
         if (!PacketizeSingleNalu(i))
           return false;
         ++i;
         break;
-      case H264PacketizationMode::NonInterleaved:
+      case H265PacketizationMode::NonInterleaved:
         int fragment_len = input_fragments_[i].size();
         int single_packet_capacity = limits_.max_payload_len;
         if (input_fragments_.size() == 1)
@@ -87,11 +88,11 @@ bool RtpPacketizerH264::GeneratePackets(H264PacketizationMode packetization_mode
           single_packet_capacity -= limits_.last_packet_reduction_len;
 
         if (fragment_len > single_packet_capacity) {
-          if (!PacketizeFuA(i)) // 一个NAL分成多个RTP包
+          if (!PacketizeFU(i)) // Fragmentation Unit
             return false;
           ++i;
         } else {
-          i = PacketizeStapA(i); // 多个NAL合并到一个RTP包
+          i = PacketizeAP(i); // Aggregation Packet
         }
         break;
     }
@@ -99,13 +100,15 @@ bool RtpPacketizerH264::GeneratePackets(H264PacketizationMode packetization_mode
   return true;
 }
 
-bool RtpPacketizerH264::PacketizeFuA(size_t fragment_index) {
+bool RtpPacketizerH265::PacketizeFU(size_t fragment_index) {
   // Fragment payload into packets (FU-A).
   rtc::ArrayView<const uint8_t> fragment = input_fragments_[fragment_index];
+    int nal_type = H265::ParseNaluType(fragment[0]);
+    RTC_LOG(LS_INFO) << "H265 nal_type PacketizeFU: " << nal_type;
 
   PayloadSizeLimits limits = limits_;
   // Leave room for the FU-A header.
-  limits.max_payload_len -= kFuAHeaderSize;
+  limits.max_payload_len -= kH265NalHeaderSize + kH265FuHeaderSize;
   // Update single/first/last packet reductions unless it is single/first/last
   // fragment.
   if (input_fragments_.size() != 1) {
@@ -125,20 +128,21 @@ bool RtpPacketizerH264::PacketizeFuA(size_t fragment_index) {
     limits.last_packet_reduction_len = 0;
 
   // Strip out the original header.
-  size_t payload_left = fragment.size() - kNalHeaderSize;
-  int offset = kNalHeaderSize;
+  size_t payload_left = fragment.size() - kH265NalHeaderSize;
+  int offset = kH265NalHeaderSize;
 
   std::vector<int> payload_sizes = SplitAboutEqually(payload_left, limits);
   if (payload_sizes.empty())
     return false;
-
+    
   for (size_t i = 0; i < payload_sizes.size(); ++i) {
     int packet_length = payload_sizes[i];
     RTC_CHECK_GT(packet_length, 0);
+    uint16_t header = (fragment[0] << 8) | fragment[1];
     packets_.push(PacketUnit(fragment.subview(offset, packet_length),
                              /*first_fragment=*/i == 0,
                              /*last_fragment=*/i == payload_sizes.size() - 1,
-                             false, fragment[0]));
+                             false, header));
     offset += packet_length;
     payload_left -= packet_length;
   }
@@ -147,12 +151,14 @@ bool RtpPacketizerH264::PacketizeFuA(size_t fragment_index) {
   return true;
 }
 
-size_t RtpPacketizerH264::PacketizeStapA(size_t fragment_index) {
-  // Aggregate fragments into one packet (STAP-A).
+size_t RtpPacketizerH265::PacketizeAP(size_t fragment_index) {
+  // Aggregate fragments into one packet (AP).
   size_t payload_size_left = limits_.max_payload_len;
   int aggregated_fragments = 0;
   size_t fragment_headers_length = 0;
   rtc::ArrayView<const uint8_t> fragment = input_fragments_[fragment_index];
+    int nal_type = H265::ParseNaluType(fragment[0]);
+    RTC_LOG(LS_INFO) << "H265 nal_type PacketizeAP: " << nal_type;
   RTC_CHECK_GE(payload_size_left, fragment.size());
   ++num_packets_left_;
 
@@ -171,18 +177,23 @@ size_t RtpPacketizerH264::PacketizeStapA(size_t fragment_index) {
     }
   };
 
+    uint16_t header = (fragment[0] << 8) | fragment[1];
+    uint8_t payload_hdr_h = header >> 8;
+    
+    nal_type = H265::ParseNaluType(payload_hdr_h);
+    RTC_LOG(LS_INFO) << "H265 nal_type PacketizeAP: " << nal_type;
   while (payload_size_left >= payload_size_needed()) {
     RTC_CHECK_GT(fragment.size(), 0);
-    packets_.push(PacketUnit(fragment, aggregated_fragments == 0, false, true, fragment[0]));
+    packets_.push(PacketUnit(fragment, aggregated_fragments == 0, false, true, header));
     payload_size_left -= fragment.size();
     payload_size_left -= fragment_headers_length;
 
-    fragment_headers_length = kLengthFieldSize;
+    fragment_headers_length = kH265LengthFieldSize;
     // If we are going to try to aggregate more fragments into this packet
     // we need to add the STAP-A NALU header and a length field for the first
     // NALU of this packet.
     if (aggregated_fragments == 0)
-      fragment_headers_length += kNalHeaderSize + kLengthFieldSize;
+      fragment_headers_length += kH265NalHeaderSize + kH265LengthFieldSize;
     ++aggregated_fragments;
 
     // Next fragment.
@@ -196,7 +207,7 @@ size_t RtpPacketizerH264::PacketizeStapA(size_t fragment_index) {
   return fragment_index;
 }
 
-bool RtpPacketizerH264::PacketizeSingleNalu(size_t fragment_index) {
+bool RtpPacketizerH265::PacketizeSingleNalu(size_t fragment_index) {
   // Add a single NALU to the queue, no aggregation.
   size_t payload_size_left = limits_.max_payload_len;
   if (input_fragments_.size() == 1)
@@ -215,13 +226,12 @@ bool RtpPacketizerH264::PacketizeSingleNalu(size_t fragment_index) {
     return false;
   }
   RTC_CHECK_GT(fragment.size(), 0u);
-  packets_.push(PacketUnit(fragment, true /* first */, true /* last */,
-                           false /* aggregated */, fragment[0]));
+  packets_.push(PacketUnit(fragment, true /* first */, true /* last */, false /* aggregated */, fragment[0]));
   ++num_packets_left_;
   return true;
 }
 
-bool RtpPacketizerH264::NextPacket(RtpPacketToSend* rtp_packet) {
+bool RtpPacketizerH265::NextPacket(RtpPacketToSend* rtp_packet) {
   RTC_DCHECK(rtp_packet);
   if (packets_.empty()) {
     return false;
@@ -245,49 +255,64 @@ bool RtpPacketizerH264::NextPacket(RtpPacketToSend* rtp_packet) {
   return true;
 }
 
-void RtpPacketizerH264::NextAggregatePacket(RtpPacketToSend* rtp_packet) {
+void RtpPacketizerH265::NextAggregatePacket(RtpPacketToSend* rtp_packet) {
   // Reserve maximum available payload, set actual payload size later.
   size_t payload_capacity = rtp_packet->FreeCapacity();
-  RTC_CHECK_GE(payload_capacity, kNalHeaderSize);
+  RTC_CHECK_GE(payload_capacity, kH265NalHeaderSize);
   uint8_t* buffer = rtp_packet->AllocatePayload(payload_capacity);
   RTC_DCHECK(buffer);
   PacketUnit* packet = &packets_.front();
   RTC_CHECK(packet->first_fragment);
-  // STAP-A NALU header.
-//    +---------------+
-//    |0|1|2|3|4|5|6|7|
-//    +-+-+-+-+-+-+-+-+
-//    |F|NRI|  Type   |
-//    +---------------+
+    
+//    +---------------+---------------+
+//    |0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|
+//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//    |F|   Type    |  LayerId  | TID |
+//    +-------------+-----------------+
+//    Figure 1: The Structure of the HEVC NAL Unit Header
     
 //     0                   1                   2                   3
 //     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    |                        RTP Header                             |
+//    |                          RTP Header                           |
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    |STAP-A NAL HDR |          NALU 1 Size          |   NALU 1 HDR  |
+//    |       PayloadHdr (Type=48)    |           NALU 1 Size         |
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    |                          NALU 1 Data                          |
-//    :                                                               :
+//    |           NALU 1 HDR          |                               |
+//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+           NALU 1 Data         |
+//    |        ...                                                    |
+//    |                                                               |
 //    +               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    |               |          NALU 2 Size          |   NALU 2 HDR  |
+//    |       . . .   |            NALU 2 Size       |   NALU 2 HDR   |
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    |                         NALU 2 Data                           |
-//    :                                                               :
+//    |   NALU 2 HDR  |                                               |
+//    +-+-+-+-+-+-+-+-+                 NALU 2 Data                   |
+//    |                    ...                                        |
 //    |                               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //    |                               :...OPTIONAL RTP padding        |
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//     Figure 7.  An example of an RTP packet including an STAP-A containing two single-time aggregation units
+//    Figure 7: An Example of an AP Packet Containing Two Aggregation Units without the DONL and DOND Fields
     
-  buffer[0] = (packet->header & (kH264FBit | kH264NriMask)) | H264::NaluType::kStapA; // 取H264 NAL的前3bits
-  size_t index = kNalHeaderSize;
+    uint8_t payload_hdr_h = packet->header >> 8;
+    uint8_t payload_hdr_l = packet->header & 0xFF;
+    uint8_t layer_id_h = payload_hdr_h & kH265LayerIDHMask;
+    
+    int nal_type = H265::ParseNaluType(payload_hdr_h);
+    RTC_LOG(LS_INFO) << "H265 nal_type AP: " << nal_type;
+    
+    payload_hdr_h = (payload_hdr_h & kH265TypeMaskN) | (H265::NaluType::kAP << 1) | layer_id_h;
+    
+    buffer[0] = payload_hdr_h;
+    buffer[1] = payload_hdr_l;
+    
+  size_t index = kH265NalHeaderSize;
   bool is_last_fragment = packet->last_fragment;
   while (packet->aggregated) {
     rtc::ArrayView<const uint8_t> fragment = packet->source_fragment;
-    RTC_CHECK_LE(index + kLengthFieldSize + fragment.size(), payload_capacity);
+    RTC_CHECK_LE(index + kH265LengthFieldSize + fragment.size(), payload_capacity);
     // Add NAL unit length field.
     ByteWriter<uint16_t>::WriteBigEndian(&buffer[index], fragment.size());
-    index += kLengthFieldSize;
+    index += kH265LengthFieldSize;
     // Add NAL unit.
     memcpy(&buffer[index], fragment.data(), fragment.size());
     index += fragment.size();
@@ -302,43 +327,57 @@ void RtpPacketizerH264::NextAggregatePacket(RtpPacketToSend* rtp_packet) {
   rtp_packet->SetPayloadSize(index);
 }
 
-void RtpPacketizerH264::NextFragmentPacket(RtpPacketToSend* rtp_packet) {
+void RtpPacketizerH265::NextFragmentPacket(RtpPacketToSend* rtp_packet) {
   PacketUnit* packet = &packets_.front();
-  // NAL unit fragmented over multiple packets (FU-A).
+  // NAL unit fragmented over multiple packets (FU).
   // We do not send original NALU header, so it will be replaced by the
   // FU indicator header of the first packet.
+   
+//    +---------------+---------------+
+//    |0|1|2|3|4|5|6|7|0|1|2|3|4|5|6|7|
+//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//    |F|   Type    |  LayerId  | TID |
+//    +-------------+-----------------+
+//    Figure 1: The Structure of the HEVC NAL Unit Header
     
-//    The FU header has the following format:
 //    +---------------+
 //    |0|1|2|3|4|5|6|7|
 //    +-+-+-+-+-+-+-+-+
-//    |S|E|R|  Type   |
+//    |S|E|  FuType   |
 //    +---------------+
-
+//    Figure 10: The Structure of FU Header
+    
 //     0                   1                   2                   3
 //     0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-//    | FU indicator |    FU header   |                               |
-//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+                               |
-//    |                                                               |
-//    |                         FU payload                            |
+//    |     PayloadHdr (Type=49)      |    FU header  |   DONL (cond) |
+//    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
+//    |   DONL (cond) |                                               |
+//    |-+-+-+-+-+-+-+-+                                               |
+//    |                          FU payload                           |
 //    |                                                               |
 //    |                               +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 //    |                               :...OPTIONAL RTP padding        |
 //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  uint8_t fu_indicator = (packet->header & (kH264FBit | kH264NriMask)) | H264::NaluType::kFuA;
-
-  // S | E | R | 5 bit type.
-  uint8_t fu_header = 0;
-  fu_header |= (packet->first_fragment ? kH264SBit : 0);
-  fu_header |= (packet->last_fragment ? kH264EBit : 0);
-  uint8_t type = packet->header & kH264TypeMask;
-  fu_header |= type;
+//                    Figure 9: The Structure of an FU
+    
+    uint8_t payload_hdr_h = packet->header >> 8;  // 1-bit F, 6-bit type, 1-bit layerID highest-bit
+    uint8_t payload_hdr_l = packet->header & 0xFF;
+    uint8_t layer_id_h = payload_hdr_h & kH265LayerIDHMask;
+    uint8_t fu_header = 0; // S | E |6 bit type.
+    fu_header |= (packet->first_fragment ? kH265SBit : 0);
+    fu_header |= (packet->last_fragment ? kH265EBit : 0);
+    int type = (payload_hdr_h & kH265TypeMask) >> 1;
+    RTC_LOG(LS_INFO) << "H265 nal_type fu: " << type;
+    fu_header |= type;
+    payload_hdr_h = (payload_hdr_h & kH265TypeMaskN) | (H265::NaluType::kFU << 1) | layer_id_h;
+    
   rtc::ArrayView<const uint8_t> fragment = packet->source_fragment;
-  uint8_t* buffer = rtp_packet->AllocatePayload(kFuAHeaderSize + fragment.size());
-  buffer[0] = fu_indicator;
-  buffer[1] = fu_header;
-  memcpy(buffer + kFuAHeaderSize, fragment.data(), fragment.size());
+  uint8_t* buffer = rtp_packet->AllocatePayload(kH265NalHeaderSize + kH265FuHeaderSize + fragment.size());
+  buffer[0] = payload_hdr_h;
+  buffer[1] = payload_hdr_l;
+  buffer[2] = fu_header;
+  memcpy(buffer + kH265NalHeaderSize + kH265FuHeaderSize, fragment.data(), fragment.size());
   if (packet->last_fragment)
     input_fragments_.pop_front();
   packets_.pop();
